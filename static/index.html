@@ -27,7 +27,7 @@ main{max-width:1150px;margin:0 auto;padding:34px 22px 56px}.hero{padding:25px 0 
 <div class="field"><label for="focus">Optional focus</label><input id="focus" name="focus" placeholder="e.g. issues for determination, holding, ratio decidendi"></div>
 <div class="field"><label for="sumText">Or paste document text</label><textarea id="sumText" name="pasted_text" placeholder="Paste the document text here. You can combine an uploaded file with additional text."></textarea></div>
 <div class="actions"><button class="btn primary" type="submit">Generate summary</button><button class="btn secondary" type="reset">Clear form</button></div><div class="status" id="sumStatus" role="status"></div>
-</form><div class="result" id="sumResult"><div class="result-head"><span>Generated summary</span><button class="btn secondary" id="copySummary" type="button">Copy summary</button></div><div class="result-body" id="sumOutput"></div></div>
+</form><div class="result" id="sumResult"><div class="result-head"><span>Generated summary</span><div class="actions"><button class="btn secondary" id="copySummary" type="button">Copy summary</button><button class="btn primary" id="goEvaluate" type="button">Evaluate this summary</button></div></div><div class="result-body" id="sumOutput"></div></div>
 </section>
 <section class="panel hidden" id="evaluatePanel"><h2>Summary accuracy evaluator</h2><p class="sub">Provide the original and the summary. The AI compares them and flags findings that need human verification.</p>
 <form id="evaluateForm"><div class="grid"><div class="field"><label for="origFile">Original document file</label><input id="origFile" type="file" name="original_file" accept=".pdf,.docx,.txt,.md,.csv"><span class="hint">PDF, DOCX, TXT, MD, or CSV · max 12 MB</span></div><div class="field"><label for="summaryFile">Summary file (optional)</label><input id="summaryFile" type="file" name="summary_file" accept=".pdf,.docx,.txt,.md,.csv"><span class="hint">Or paste the summary below.</span></div></div>
@@ -46,7 +46,25 @@ tabs.forEach(t=>t.addEventListener('click',()=>{tabs.forEach(x=>x.classList.togg
 async function submitForm(formId, endpoint, statusId, resultId, outputId, buttonText){
  const form=document.getElementById(formId), status=document.getElementById(statusId), result=document.getElementById(resultId), output=document.getElementById(outputId), button=form.querySelector('button[type="submit"]');
  form.addEventListener('submit',async e=>{e.preventDefault();status.className='status';status.textContent='Working… This may take a little while on a free model.';button.disabled=true;button.textContent='Please wait…';result.style.display='none';
- try{const response=await fetch(endpoint,{method:'POST',body:new FormData(form)});const data=await response.json();if(!response.ok)throw new Error(data.detail||'The request failed.');output.textContent=data.summary||data.evaluation||'No text was returned.';result.style.display='block';status.className='status success';status.textContent='Complete. Please verify the result against the original document.';result.scrollIntoView({behavior:'smooth',block:'start'});}
+ try{const response=await fetch(endpoint,{method:'POST',body:new FormData(form)});const data=await response.json();if(!response.ok)throw new Error(data.detail||'The request failed.');output.textContent=data.summary||data.evaluation||'No text was returned.';result.style.display='block';
+  if(formId==='summarizeForm' && data.summary){
+   const pastedOriginal=document.getElementById('sumText').value.trim();
+   const sourceFile=document.getElementById('sumFile');
+   const evalOriginal=document.getElementById('origText');
+   const evalOriginalFile=document.getElementById('origFile');
+   const evalSummary=document.getElementById('summaryText');
+   const evalSummaryFile=document.getElementById('summaryFile');
+   evalSummary.value=data.summary;
+   evalSummaryFile.value='';
+   if(pastedOriginal){evalOriginal.value=pastedOriginal;evalOriginalFile.value='';}
+   else if(sourceFile.files && sourceFile.files.length){
+    evalOriginal.value='';
+    try{const transfer=new DataTransfer();transfer.items.add(sourceFile.files[0]);evalOriginalFile.files=transfer.files;}catch(copyError){evalOriginalFile.value='';}
+   }
+   status.className='status success';
+   status.textContent='Summary ready. The evaluator fields have been filled in for you. Open “Evaluate a summary” and tap “Evaluate summary”.';
+  }else{status.className='status success';status.textContent='Evaluation complete. Please verify the result against the original document.';}
+  result.scrollIntoView({behavior:'smooth',block:'start'});}
  catch(err){status.className='status error';status.textContent=err.message||'Something went wrong. Please try again.';}
  finally{button.disabled=false;button.textContent=buttonText;}
  });
@@ -54,6 +72,7 @@ async function submitForm(formId, endpoint, statusId, resultId, outputId, button
 submitForm('summarizeForm','/api/summarize','sumStatus','sumResult','sumOutput','Generate summary');
 submitForm('evaluateForm','/api/evaluate','evalStatus','evalResult','evalOutput','Evaluate summary');
 document.getElementById('copySummary').addEventListener('click',()=>navigator.clipboard.writeText(document.getElementById('sumOutput').textContent));
+document.getElementById('goEvaluate').addEventListener('click',()=>{document.querySelector('[data-tab="evaluate"]').click();document.getElementById('evaluatePanel').scrollIntoView({behavior:'smooth',block:'start'});});
 document.getElementById('copyEvaluation').addEventListener('click',()=>navigator.clipboard.writeText(document.getElementById('evalOutput').textContent));
 </script>
 </body></html>
