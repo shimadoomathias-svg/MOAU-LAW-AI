@@ -11,11 +11,20 @@ import httpx
 
 APP_NAME = "MOAU LAW AI"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", str(12 * 1024 * 1024)))
+DEFAULT_MODEL = os.getenv(
+    "OPENROUTER_MODEL",
+    "nvidia/nemotron-3-super-120b-a12b:free"
+)
+MAX_FILE_BYTES = int(
+    os.getenv("MAX_FILE_BYTES", str(12 * 1024 * 1024))
+)
 
-app = FastAPI(title=APP_NAME, version="1.0.0",
-              description="Legal document summarization and summary-quality review.")
+app = FastAPI(
+    title=APP_NAME,
+    version="1.0.0",
+    description="Legal document summarization and summary-quality review."
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -28,65 +37,129 @@ class TextRequest(BaseModel):
 
 def extract_text(filename: str, raw: bytes) -> str:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
     if suffix in {"txt", "md", "csv"}:
         for encoding in ("utf-8", "utf-16", "latin-1"):
             try:
                 return raw.decode(encoding)
             except UnicodeDecodeError:
                 continue
+
         raise HTTPException(400, "Could not decode this text file.")
+
     if suffix == "pdf":
         try:
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(raw))
-            return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+            return "\n\n".join(
+                page.extract_text() or "" for page in reader.pages
+            )
         except Exception as exc:
-            raise HTTPException(400, f"Could not read this PDF. If it is scanned, OCR is needed. Details: {exc}")
+            raise HTTPException(
+                400,
+                f"Could not read this PDF. If it is scanned, OCR is needed. Details: {exc}"
+            )
+
     if suffix == "docx":
         try:
             from docx import Document
             doc = Document(io.BytesIO(raw))
             return "\n".join(p.text for p in doc.paragraphs)
         except Exception as exc:
-            raise HTTPException(400, f"Could not read this DOCX file: {exc}")
-    raise HTTPException(400, "Unsupported file type. Upload PDF, DOCX, TXT, MD, or CSV.")
+            raise HTTPException(
+                400,
+                f"Could not read this DOCX file: {exc}"
+            )
+
+    raise HTTPException(
+        400,
+        "Unsupported file type. Upload PDF, DOCX, TXT, MD, or CSV."
+    )
 
 
 async def call_openrouter(messages, max_tokens=1600):
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+
     if not api_key:
-        raise HTTPException(503, "The AI service is not configured yet. Add OPENROUTER_API_KEY in your hosting environment settings.")
+        raise HTTPException(
+            503,
+            "The AI service is not configured yet. Add OPENROUTER_API_KEY in your hosting environment settings."
+        )
+
     model = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL).strip()
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("APP_PUBLIC_URL", "https://moau-law-ai.onrender.com"),
+        "HTTP-Referer": os.getenv(
+            "APP_PUBLIC_URL",
+            "https://moau-law-ai.onrender.com"
+        ),
         "X-Title": APP_NAME,
     }
+
     payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
         "max_tokens": max_tokens,
     }
+
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+            response = await client.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload
+            )
+
     except httpx.TimeoutException:
-        raise HTTPException(504, "The AI provider took too long to respond. Please try again.")
+        raise HTTPException(
+            504,
+            "The AI provider took too long to respond. Please try again."
+        )
+
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Could not reach the AI provider: {exc}")
+        raise HTTPException(
+            502,
+            f"Could not reach the AI provider: {exc}"
+        )
+
     if response.status_code >= 400:
         try:
-            detail = response.json().get("error", {}).get("message", response.text)
+            detail = response.json().get("error", {}).get(
+                "message",
+                response.text
+            )
         except Exception:
             detail = response.text
-        raise HTTPException(502, f"OpenRouter returned an error ({response.status_code}): {detail}")
+
+        raise HTTPException(
+            502,
+            f"OpenRouter returned an error ({response.status_code}): {detail}"
+        )
+
     try:
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+
+        if isinstance(content, list):
+            content = "\n".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict)
+            )
+
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Empty AI response")
+
+        return content.strip()
+
     except (ValueError, KeyError, IndexError, TypeError):
-        raise HTTPException(502, "The AI provider returned an unexpected response.")
+        raise HTTPException(
+            502,
+            "The AI provider returned an empty or unexpected response."
+        )
 
 
 def clean_text(text: str) -> str:
@@ -103,8 +176,14 @@ async def home():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "app": APP_NAME, "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL),
-            "api_key_configured": bool(os.getenv("OPENROUTER_API_KEY", "").strip())}
+    return {
+        "status": "ok",
+        "app": APP_NAME,
+        "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL),
+        "api_key_configured": bool(
+            os.getenv("OPENROUTER_API_KEY", "").strip()
+        )
+    }
 
 
 @app.post("/api/summarize")
@@ -118,24 +197,40 @@ async def summarize(
 ):
     source = ""
     filename = ""
+
     if file and file.filename:
         raw = await file.read()
+
         if len(raw) > MAX_FILE_BYTES:
-            raise HTTPException(413, "This file is too large. Maximum upload size is 12 MB.")
+            raise HTTPException(
+                413,
+                "This file is too large. Maximum upload size is 12 MB."
+            )
+
         filename = file.filename
         source = extract_text(filename, raw)
+
     if pasted_text.strip():
-        source = (source + "\n\n" + pasted_text.strip()).strip()
+        source = (
+            source + "\n\n" + pasted_text.strip()
+        ).strip()
+
     source = clean_text(source)
+
     if len(source) < 80:
-        raise HTTPException(400, "Please upload a legal document or paste at least a short paragraph of text.")
-    # Limit input to stay within typical free-model limits and prevent runaway requests.
+        raise HTTPException(
+            400,
+            "Please upload a legal document or paste at least a short paragraph of text."
+        )
+
     source = source[:60000]
+
     length_guide = {
         "Brief": "about 150–250 words",
         "Standard": "about 400–600 words",
         "Detailed": "about 800–1,200 words",
     }.get(summary_length, "about 400–600 words")
+
     prompt = f"""You are MOAU LAW AI, a careful legal-document assistant. Summarize only the provided document.
 Jurisdiction: {jurisdiction}
 Document type: {document_type}
@@ -152,9 +247,19 @@ Requirements:
 
 DOCUMENT TEXT:
 {source}"""
-    result = await call_openrouter([{"role": "user", "content": prompt}], max_tokens=2300)
-    return {"summary": result, "filename": filename, "characters_processed": len(source),
-            "jurisdiction": jurisdiction, "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)}
+
+    result = await call_openrouter(
+        [{"role": "user", "content": prompt}],
+        max_tokens=2300
+    )
+
+    return {
+        "summary": result,
+        "filename": filename,
+        "characters_processed": len(source),
+        "jurisdiction": jurisdiction,
+        "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
+    }
 
 
 @app.post("/api/evaluate")
@@ -165,22 +270,45 @@ async def evaluate(
     summary_text: str = Form(""),
     jurisdiction: str = Form("Nigeria"),
 ):
-    original = original_text.strip()
-    summary = summary_text.strip()
-    if original_file and original_file.filename:
+    # Prioritise text fields. Uploaded files are fallbacks only.
+    original = clean_text(original_text)
+    summary = clean_text(summary_text)
+
+    if len(original) < 80 and original_file and original_file.filename:
         raw = await original_file.read()
+
         if len(raw) > MAX_FILE_BYTES:
-            raise HTTPException(413, "The original file is too large. Maximum upload size is 12 MB.")
-        original = extract_text(original_file.filename, raw).strip()
-    if summary_file and summary_file.filename:
+            raise HTTPException(
+                413,
+                "The original file is too large. Maximum upload size is 12 MB."
+            )
+
+        original = clean_text(
+            extract_text(original_file.filename, raw)
+        )
+
+    if len(summary) < 30 and summary_file and summary_file.filename:
         raw = await summary_file.read()
+
         if len(raw) > MAX_FILE_BYTES:
-            raise HTTPException(413, "The summary file is too large. Maximum upload size is 12 MB.")
-        summary = extract_text(summary_file.filename, raw).strip()
+            raise HTTPException(
+                413,
+                "The summary file is too large. Maximum upload size is 12 MB."
+            )
+
+        summary = clean_text(
+            extract_text(summary_file.filename, raw)
+        )
+
     if len(original) < 80 or len(summary) < 30:
-        raise HTTPException(400, "Provide the original document (at least 80 characters) and its summary (at least 30 characters).")
+        raise HTTPException(
+            400,
+            "Provide the original document (at least 80 characters) and its summary (at least 30 characters)."
+        )
+
     original = original[:60000]
     summary = summary[:18000]
+
     prompt = f"""You are MOAU LAW AI, a rigorous legal-summary quality reviewer.
 Jurisdiction: {jurisdiction}
 
@@ -200,12 +328,26 @@ ORIGINAL DOCUMENT:
 
 SUMMARY TO EVALUATE:
 {summary}"""
-    result = await call_openrouter([{"role": "user", "content": prompt}], max_tokens=2600)
-    return {"evaluation": result, "original_characters_processed": len(original),
-            "summary_characters_processed": len(summary), "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)}
+
+    result = await call_openrouter(
+        [{"role": "user", "content": prompt}],
+        max_tokens=2600
+    )
+
+    return {
+        "evaluation": result,
+        "original_characters_processed": len(original),
+        "summary_characters_processed": len(summary),
+        "model": os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
+    }
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+          )
+  
