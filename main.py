@@ -87,14 +87,10 @@ async def call_openrouter(messages, max_tokens=1600):
         )
 
     model = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL).strip()
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv(
-            "APP_PUBLIC_URL",
-            "https://moau-law-ai.onrender.com"
-        ),
+        "HTTP-Referer": os.getenv("APP_PUBLIC_URL", "https://law-ai.onrender.com"),
         "X-Title": APP_NAME,
     }
 
@@ -105,61 +101,68 @@ async def call_openrouter(messages, max_tokens=1600):
         "max_tokens": max_tokens,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                OPENROUTER_URL,
-                headers=headers,
-                json=payload
-            )
-
-    except httpx.TimeoutException:
-        raise HTTPException(
-            504,
-            "The AI provider took too long to respond. Please try again."
-        )
-
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            502,
-            f"Could not reach the AI provider: {exc}"
-        )
-
-    if response.status_code >= 400:
+    last_problem = "The provider returned no usable text."
+    # openrouter/free can route consecutive requests to different free providers.
+    # Retry once when a provider returns HTTP 200 but no assistant text.
+    for attempt in range(2):
         try:
-            detail = response.json().get("error", {}).get(
-                "message",
-                response.text
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(
+                    OPENROUTER_URL,
+                    headers=headers,
+                    json=payload
+                )
+        except httpx.TimeoutException:
+            raise HTTPException(
+                504,
+                "The AI provider took too long to respond. Please try again."
             )
-        except Exception:
-            detail = response.text
-
-        raise HTTPException(
-            502,
-            f"OpenRouter returned an error ({response.status_code}): {detail}"
-        )
-
-    try:
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-
-        if isinstance(content, list):
-            content = "\n".join(
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                502,
+                f"Could not reach the AI provider: {exc}"
             )
 
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("Empty AI response")
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+                detail = error_data.get("error", {}).get("message", response.text)
+            except Exception:
+                detail = response.text
+            raise HTTPException(
+                502,
+                f"OpenRouter returned an error ({response.status_code}): {detail}"
+            )
 
-        return content.strip()
+        try:
+            data = response.json()
+            choices = data.get("choices") or []
+            message = (choices[0].get("message") or {}) if choices else {}
+            content = message.get("content")
 
-    except (ValueError, KeyError, IndexError, TypeError):
-        raise HTTPException(
-            502,
-            "The AI provider returned an empty or unexpected response."
-        )
+            if isinstance(content, list):
+                content = "\\n".join(
+                    item.get("text", "")
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") in (None, "text")
+                )
+
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+
+            finish_reason = choices[0].get("finish_reason", "unknown") if choices else "no choices"
+            provider_model = data.get("model", model)
+            last_problem = (
+                f"Provider '{provider_model}' returned no text "
+                f"(finish reason: {finish_reason})."
+            )
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            last_problem = f"Could not read the provider response: {type(exc).__name__}."
+
+    raise HTTPException(
+        502,
+        f"The AI provider returned an empty response twice. {last_problem} Please try Evaluate again."
+    )
 
 
 def clean_text(text: str) -> str:
