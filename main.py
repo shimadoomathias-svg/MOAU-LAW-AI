@@ -306,8 +306,11 @@ async def evaluate(
             "Provide the original document (at least 80 characters) and its summary (at least 30 characters)."
         )
 
-    original = original[:60000]
-    summary = summary[:18000]
+    # Keep evaluation requests within a practical size for free routed models.
+    # Preserve the beginning and end of long documents where case facts and orders often appear.
+    if len(original) > 30000:
+        original = original[:22000] + "\\n\\n[Middle portion omitted to keep the evaluation request within model limits.]\\n\\n" + original[-8000:]
+    summary = summary[:12000]
 
     prompt = f"""You are MOAU LAW AI, a rigorous legal-summary quality reviewer.
 Jurisdiction: {jurisdiction}
@@ -331,7 +334,7 @@ SUMMARY TO EVALUATE:
 
     result = await call_openrouter(
         [{"role": "user", "content": prompt}],
-        max_tokens=2600
+        max_tokens=1600
     )
 
     return {
