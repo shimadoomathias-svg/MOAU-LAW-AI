@@ -309,35 +309,31 @@ async def evaluate(
             "Provide the original document (at least 80 characters) and its summary (at least 30 characters)."
         )
 
-    # Keep evaluation requests within a practical size for free routed models.
-    # Preserve the beginning and end of long documents where case facts and orders often appear.
-    if len(original) > 30000:
-        original = original[:22000] + "\\n\\n[Middle portion omitted to keep the evaluation request within model limits.]\\n\\n" + original[-8000:]
-    summary = summary[:12000]
+    # Keep evaluation inputs compact so free models have enough output budget
+    # to produce the report instead of stopping mid-generation.
+    if len(original) > 16000:
+        original = original[:11000] + "\\n\\n[Middle portion omitted.]\\n\\n" + original[-5000:]
+    summary = summary[:7000]
 
-    prompt = f"""You are MOAU LAW AI, a rigorous legal-summary quality reviewer.
-Jurisdiction: {jurisdiction}
+    prompt = f"""Review this legal summary against its source. Jurisdiction: {jurisdiction}.
+Assess ONLY whether the summary faithfully represents the source; do not assess whether the underlying law or judgment is correct.
+Write a concise report using these headings:
+1. Overall assessment
+2. Important omissions
+3. Distortions or unsupported claims
+4. Accurate points
+5. Specific corrections recommended
+For each finding, identify the summary claim and the source passage or explain the mismatch. Quote briefly. If the source does not allow verification, say so. Do not invent facts, quotations, paragraph numbers or legal authorities. Do not give a made-up accuracy percentage.
 
-Compare the summary against the supplied original. Do not decide whether the underlying judgment or law is legally correct; evaluate fidelity to the source.
-Return a structured report with:
-1. Overall assessment (not a fabricated numeric accuracy score).
-2. Material omissions: source points important to understanding the outcome that the summary leaves out; cite section/paragraph/page references only if visible in the source.
-3. Distortions or misrepresentations: what the summary changes or overstates, with source wording/context.
-4. Unsupported claims: summary statements not supported by the supplied original.
-5. Potential material inaccuracies: exact summary claim, what the source actually says, and why it matters.
-6. Preserved accurately: key points the summary represents well.
-7. Recommended corrections to the summary.
-For every finding, quote only short phrases and explain the comparison. If you cannot verify a point from the supplied text, say so. Do not invent paragraph numbers, legal authorities, facts or quotations. Clearly distinguish high-confidence findings from possible concerns. This is an aid, not a substitute for legal review.
-
-ORIGINAL DOCUMENT:
+SOURCE DOCUMENT:
 {original}
 
-SUMMARY TO EVALUATE:
+SUMMARY:
 {summary}"""
 
     result = await call_openrouter(
         [{"role": "user", "content": prompt}],
-        max_tokens=1600
+        max_tokens=3500
     )
 
     return {
